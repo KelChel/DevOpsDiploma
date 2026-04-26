@@ -1,4 +1,4 @@
-"""Initial database baseline.
+"""Initial database baseline without business tables.
 
 Revision ID: 202604260001
 Revises:

@@ -10,7 +10,7 @@
 |---|---|
 | Backend | Создано FastAPI-приложение с endpoint `/health`. |
 | Frontend | Создан React/Vite-каркас с базовой навигацией и проверкой API. |
-| База данных | PostgreSQL добавлен в Docker Compose, Alembic настроен на каталог `database/migrations`. |
+| База данных | PostgreSQL добавлен в Docker Compose, Alembic настроен на каталог `database/migrations`, создана baseline-миграция без таблиц. |
 | DevOps | Добавлены Dockerfile для backend и frontend, создан `docker-compose.yml`. |
 | Документация | Обновлены инструкции локального запуска в `README.md`, `backend/README.md`, `frontend/README.md`, `database/README.md`. |
 
@@ -23,7 +23,7 @@
 | Frontend открывается в браузере | Выполнено | `frontend/src/main.jsx`, `frontend/src/styles.css` |
 | Backend может подключиться к базе данных | Выполнено | `/health` выполняет `SELECT 1` |
 | Конфигурация берется из переменных окружения | Выполнено | `.env.example`, `backend/app/config.py`, `docker-compose.yml` |
-| Создана начальная миграция | Выполнено | `database/migrations/versions/202604260001_initial_baseline.py` |
+| Создана начальная миграция | Выполнено | `database/migrations/versions/202604260001_initial_baseline.py`, baseline без таблиц |
 
 ## Локальная проверка
 

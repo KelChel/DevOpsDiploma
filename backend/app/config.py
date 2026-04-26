@@ -16,6 +16,9 @@ class Settings(BaseSettings):
         default="postgresql+asyncpg://ticket_system:change_me_for_local_only@postgres:5432/ticket_system",
         alias="DATABASE_URL",
     )
+    jwt_secret_key: str = Field(default="replace_with_local_development_secret", alias="JWT_SECRET_KEY")
+    jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
+    jwt_access_token_expire_minutes: int = Field(default=60, alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
