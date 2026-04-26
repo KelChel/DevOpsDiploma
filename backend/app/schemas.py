@@ -63,6 +63,10 @@ class TicketStatusUpdateRequest(BaseModel):
     status_code: str = Field(min_length=1, max_length=32)
 
 
+class TicketCommentCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=2000)
+
+
 class TicketRead(BaseModel):
     id: int
     title: str
@@ -83,3 +87,37 @@ class TicketRead(BaseModel):
     assigned_at: datetime | None = None
     completed_at: datetime | None = None
     closed_at: datetime | None = None
+
+
+class TicketHistoryRead(BaseModel):
+    id: int
+    ticket_id: int
+    event_type: str
+    field_name: str | None = None
+    old_value: str | None = None
+    new_value: str | None = None
+    actor_id: int | None = None
+    actor_name: str | None = None
+    created_at: datetime
+
+
+class TicketCommentRead(BaseModel):
+    id: int
+    ticket_id: int
+    author_id: int
+    author_name: str
+    body: str
+    created_at: datetime
+
+
+class NotificationLogRead(BaseModel):
+    id: int
+    ticket_id: int | None = None
+    event_type: str
+    provider: str
+    recipient_user_id: int | None = None
+    recipient_name: str | None = None
+    status: str
+    error_message: str | None = None
+    created_at: datetime
+    sent_at: datetime | None = None

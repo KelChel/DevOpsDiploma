@@ -2,10 +2,13 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
+  Bell,
   ClipboardList,
   Database,
+  History,
   KeyRound,
   LogOut,
+  MessageSquare,
   Play,
   RefreshCw,
   Send,
@@ -43,6 +46,13 @@ const priorityLabels = {
   critical: "Критический",
 };
 
+const eventLabels = {
+  ticket_created: "Заявка создана",
+  ticket_assigned: "Назначен исполнитель",
+  status_changed: "Статус изменен",
+  comment_added: "Добавлен комментарий",
+};
+
 const demoUsers = [
   { username: "employee", role: "Сотрудник" },
   { username: "executor", role: "Исполнитель" },
@@ -65,6 +75,10 @@ function App() {
   const [ticketError, setTicketError] = useState("");
   const [ticketMessage, setTicketMessage] = useState("");
   const [isTicketsLoading, setIsTicketsLoading] = useState(false);
+  const [comments, setComments] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [detailsError, setDetailsError] = useState("");
 
   const userRoles = useMemo(() => new Set(user?.roles || []), [user]);
   const canUseTickets = userRoles.has("employee") || userRoles.has("executor") || userRoles.has("admin");
@@ -120,6 +134,29 @@ function App() {
       setTicketError(error.message);
     } finally {
       setIsTicketsLoading(false);
+    }
+  }
+
+  async function loadTicketDetails(ticketId = selectedTicketId) {
+    if (!token || !ticketId) {
+      setComments([]);
+      setHistory([]);
+      setNotifications([]);
+      return;
+    }
+
+    setDetailsError("");
+    try {
+      const [commentData, historyData, notificationData] = await Promise.all([
+        apiFetch(`/tickets/${ticketId}/comments`),
+        apiFetch(`/tickets/${ticketId}/history`),
+        apiFetch(`/tickets/${ticketId}/notifications`),
+      ]);
+      setComments(commentData);
+      setHistory(historyData);
+      setNotifications(notificationData);
+    } catch (error) {
+      setDetailsError(error.message);
     }
   }
 
@@ -221,6 +258,10 @@ function App() {
     loadTickets();
   }, [token, user?.id, filters.status_code, filters.category_id, filters.assignee_id, filters.date_from, filters.date_to]);
 
+  useEffect(() => {
+    loadTicketDetails(selectedTicketId);
+  }, [token, selectedTicketId]);
+
   const healthText =
     health.status === "ok"
       ? "API и база данных доступны"
@@ -318,6 +359,27 @@ function App() {
     );
   }
 
+  async function handleCreateComment(event) {
+    event.preventDefault();
+    if (!selectedTicket) {
+      return;
+    }
+    const formData = new FormData(event.currentTarget);
+    setTicketError("");
+    setTicketMessage("");
+    try {
+      await apiFetch(`/tickets/${selectedTicket.id}/comments`, {
+        method: "POST",
+        body: JSON.stringify({ body: formData.get("body") }),
+      });
+      setTicketMessage("Комментарий добавлен");
+      event.currentTarget.reset();
+      await loadTicketDetails(selectedTicket.id);
+    } catch (error) {
+      setTicketError(error.message);
+    }
+  }
+
   async function runTicketAction(action) {
     setTicketError("");
     setTicketMessage("");
@@ -326,6 +388,7 @@ function App() {
       setTicketMessage("Заявка обновлена");
       setSelectedTicketId(ticket.id);
       await loadTickets();
+      await loadTicketDetails(ticket.id);
     } catch (error) {
       setTicketError(error.message);
     }
@@ -351,6 +414,13 @@ function App() {
     return false;
   }
 
+  function formatDateTime(value) {
+    return new Intl.DateTimeFormat("ru-RU", {
+      dateStyle: "short",
+      timeStyle: "short",
+    }).format(new Date(value));
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar" aria-label="Основная навигация">
@@ -369,8 +439,8 @@ function App() {
       <section className="workspace" id="overview">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Итерация 3</p>
-            <h1>Жизненный цикл заявок</h1>
+            <p className="eyebrow">Итерация 4</p>
+            <h1>История, комментарии и уведомления</h1>
           </div>
           <div className={`health ${health.status}`}>
             <Activity aria-hidden="true" />
@@ -381,18 +451,18 @@ function App() {
         <section className="status-grid" aria-label="Статус реализации">
           <article className="status-card">
             <Server aria-hidden="true" />
-            <h2>Tickets API</h2>
-            <p>Создание, просмотр, назначение, фильтры и смена статусов доступны через защищенные endpoint.</p>
+            <h2>История</h2>
+            <p>Создание, назначение, смена статуса и комментарии фиксируются в аудиторской ленте заявки.</p>
           </article>
           <article className="status-card">
             <Database aria-hidden="true" />
-            <h2>Справочники</h2>
-            <p>Категории и статусы создаются миграцией, без отдельного административного UI.</p>
+            <h2>Комментарии</h2>
+            <p>Участники заявки могут обмениваться комментариями без хранения медицинских данных пациентов.</p>
           </article>
           <article className="status-card">
             <ShieldCheck aria-hidden="true" />
-            <h2>RBAC</h2>
-            <p>Сотрудник видит свои заявки, исполнитель назначенные, администратор весь список.</p>
+            <h2>Уведомления</h2>
+            <p>Mock/MAX-провайдер создает журнал событий отправки с получателем, статусом и временем.</p>
           </article>
         </section>
 
@@ -607,6 +677,69 @@ function App() {
                       <span>Закрыть</span>
                     </button>
                   </div>
+
+                  <section className="detail-section">
+                    <div className="panel-title">
+                      <MessageSquare aria-hidden="true" />
+                      <h2>Комментарии</h2>
+                    </div>
+                    <form className="comment-form" onSubmit={handleCreateComment}>
+                      <textarea name="body" minLength="1" maxLength="2000" rows="3" placeholder="Комментарий по заявке" required />
+                      <button className="button secondary" type="submit">
+                        <Send aria-hidden="true" />
+                        <span>Добавить</span>
+                      </button>
+                    </form>
+                    <div className="timeline">
+                      {comments.length === 0 && <p>Комментариев пока нет.</p>}
+                      {comments.map((comment) => (
+                        <article className="timeline-item" key={comment.id}>
+                          <strong>{comment.author_name}</strong>
+                          <time>{formatDateTime(comment.created_at)}</time>
+                          <p>{comment.body}</p>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="detail-section">
+                    <div className="panel-title">
+                      <History aria-hidden="true" />
+                      <h2>История</h2>
+                    </div>
+                    {detailsError && <p className="form-error">{detailsError}</p>}
+                    <div className="timeline compact">
+                      {history.length === 0 && <p>История пока не сформирована.</p>}
+                      {history.map((item) => (
+                        <article className="timeline-item" key={item.id}>
+                          <strong>{eventLabels[item.event_type] || item.event_type}</strong>
+                          <time>{formatDateTime(item.created_at)}</time>
+                          <p>
+                            {item.actor_name || "Система"}
+                            {item.field_name ? ` · ${item.field_name}` : ""}
+                            {item.old_value || item.new_value ? ` · ${item.old_value || "пусто"} → ${item.new_value || "пусто"}` : ""}
+                          </p>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="detail-section">
+                    <div className="panel-title">
+                      <Bell aria-hidden="true" />
+                      <h2>Уведомления</h2>
+                    </div>
+                    <div className="notification-list">
+                      {notifications.length === 0 && <p>Событий уведомлений пока нет.</p>}
+                      {notifications.map((item) => (
+                        <div className="notification-row" key={item.id}>
+                          <span>{eventLabels[item.event_type] || item.event_type}</span>
+                          <span>{item.recipient_name || "Получатель не задан"}</span>
+                          <span className={`status-pill ${item.status}`}>{item.provider}: {item.status}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
                 </div>
               ) : (
                 <p>Выберите заявку из списка.</p>

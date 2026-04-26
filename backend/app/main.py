@@ -10,12 +10,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import authenticate_user, get_current_user, issue_user_token, require_roles
 from app.config import get_settings
 from app.db import engine, get_db_session
+from app.notifications import build_notification_provider
 from app.schemas import (
     LoginRequest,
+    NotificationLogRead,
     RoleRead,
     TicketAssignRequest,
     TicketCategoryRead,
+    TicketCommentCreate,
+    TicketCommentRead,
     TicketCreate,
+    TicketHistoryRead,
     TicketRead,
     TicketStatusRead,
     TicketStatusUpdateRequest,
@@ -25,6 +30,11 @@ from app.schemas import (
 
 
 settings = get_settings()
+notification_provider = build_notification_provider(
+    settings.notification_provider,
+    max_api_base_url=settings.max_api_base_url,
+    max_bot_token=settings.max_bot_token,
+)
 
 ALLOWED_STATUS_TRANSITIONS = {
     "created": {"assigned"},
@@ -122,6 +132,92 @@ async def _ensure_executor(session: AsyncSession, assignee_id: int) -> None:
     )
     if result.scalar_one_or_none() is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Assignee must be an active executor")
+
+
+async def _add_ticket_history(
+    session: AsyncSession,
+    *,
+    ticket_id: int,
+    event_type: str,
+    actor_id: int | None,
+    field_name: str | None = None,
+    old_value: str | None = None,
+    new_value: str | None = None,
+) -> None:
+    await session.execute(
+        text(
+            """
+            INSERT INTO ticket_history (ticket_id, event_type, field_name, old_value, new_value, actor_id)
+            VALUES (:ticket_id, :event_type, :field_name, :old_value, :new_value, :actor_id)
+            """
+        ),
+        {
+            "ticket_id": ticket_id,
+            "event_type": event_type,
+            "field_name": field_name,
+            "old_value": old_value,
+            "new_value": new_value,
+            "actor_id": actor_id,
+        },
+    )
+
+
+def _notification_recipients(ticket: TicketRead, event_type: str, actor_id: int) -> list[int]:
+    recipients = {ticket.created_by_id}
+    if ticket.assignee_id is not None:
+        recipients.add(ticket.assignee_id)
+    if event_type == "ticket_assigned" and ticket.assignee_id is not None:
+        recipients = {ticket.assignee_id}
+    recipients.discard(actor_id)
+    return sorted(recipients)
+
+
+async def _log_notifications(
+    session: AsyncSession,
+    *,
+    ticket: TicketRead,
+    event_type: str,
+    actor_id: int,
+) -> None:
+    recipients = _notification_recipients(ticket, event_type, actor_id)
+    if not recipients:
+        recipients = [ticket.created_by_id]
+
+    for recipient_id in recipients:
+        result = await notification_provider.send(event_type=event_type, ticket_id=ticket.id, recipient_user_id=recipient_id)
+        await session.execute(
+            text(
+                """
+                INSERT INTO notification_logs (
+                    ticket_id,
+                    event_type,
+                    provider,
+                    recipient_user_id,
+                    status,
+                    error_message,
+                    sent_at
+                )
+                VALUES (
+                    :ticket_id,
+                    :event_type,
+                    :provider,
+                    :recipient_user_id,
+                    :status,
+                    :error_message,
+                    :sent_at
+                )
+                """
+            ),
+            {
+                "ticket_id": ticket.id,
+                "event_type": event_type,
+                "provider": notification_provider.name,
+                "recipient_user_id": recipient_id,
+                "status": result.status,
+                "error_message": result.error_message,
+                "sent_at": result.sent_at,
+            },
+        )
 
 
 app = FastAPI(
@@ -306,6 +402,17 @@ async def create_ticket(
         },
     )
     ticket_id = result.scalar_one()
+    await _add_ticket_history(
+        session,
+        ticket_id=int(ticket_id),
+        event_type="ticket_created",
+        field_name="status",
+        old_value=None,
+        new_value="created",
+        actor_id=current_user.id,
+    )
+    ticket = await _load_ticket(session, int(ticket_id))
+    await _log_notifications(session, ticket=ticket, event_type="ticket_created", actor_id=current_user.id)
     await session.commit()
     return await _load_ticket(session, int(ticket_id))
 
@@ -322,11 +429,165 @@ async def read_ticket(
     return ticket
 
 
+@app.get("/tickets/{ticket_id}/history", response_model=list[TicketHistoryRead], tags=["tickets"])
+async def read_ticket_history(
+    ticket_id: int,
+    current_user: UserRead = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[TicketHistoryRead]:
+    ticket = await _load_ticket(session, ticket_id)
+    if not _can_read_ticket(current_user, ticket):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Ticket is not available")
+
+    result = await session.execute(
+        text(
+            """
+            SELECT
+                ticket_history.id,
+                ticket_history.ticket_id,
+                ticket_history.event_type,
+                ticket_history.field_name,
+                ticket_history.old_value,
+                ticket_history.new_value,
+                ticket_history.actor_id,
+                users.full_name AS actor_name,
+                ticket_history.created_at
+            FROM ticket_history
+            LEFT JOIN users ON users.id = ticket_history.actor_id
+            WHERE ticket_history.ticket_id = :ticket_id
+            ORDER BY ticket_history.created_at DESC, ticket_history.id DESC
+            """
+        ),
+        {"ticket_id": ticket_id},
+    )
+    return [TicketHistoryRead(**dict(row)) for row in result.mappings().all()]
+
+
+@app.get("/tickets/{ticket_id}/comments", response_model=list[TicketCommentRead], tags=["tickets"])
+async def read_ticket_comments(
+    ticket_id: int,
+    current_user: UserRead = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[TicketCommentRead]:
+    ticket = await _load_ticket(session, ticket_id)
+    if not _can_read_ticket(current_user, ticket):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Ticket is not available")
+
+    result = await session.execute(
+        text(
+            """
+            SELECT
+                ticket_comments.id,
+                ticket_comments.ticket_id,
+                ticket_comments.author_id,
+                users.full_name AS author_name,
+                ticket_comments.body,
+                ticket_comments.created_at
+            FROM ticket_comments
+            JOIN users ON users.id = ticket_comments.author_id
+            WHERE ticket_comments.ticket_id = :ticket_id
+            ORDER BY ticket_comments.created_at ASC, ticket_comments.id ASC
+            """
+        ),
+        {"ticket_id": ticket_id},
+    )
+    return [TicketCommentRead(**dict(row)) for row in result.mappings().all()]
+
+
+@app.post("/tickets/{ticket_id}/comments", response_model=TicketCommentRead, status_code=status.HTTP_201_CREATED, tags=["tickets"])
+async def create_ticket_comment(
+    ticket_id: int,
+    payload: TicketCommentCreate,
+    current_user: UserRead = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> TicketCommentRead:
+    ticket = await _load_ticket(session, ticket_id)
+    if not _can_read_ticket(current_user, ticket):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Ticket is not available")
+
+    result = await session.execute(
+        text(
+            """
+            INSERT INTO ticket_comments (ticket_id, author_id, body)
+            VALUES (:ticket_id, :author_id, :body)
+            RETURNING id
+            """
+        ),
+        {"ticket_id": ticket_id, "author_id": current_user.id, "body": payload.body},
+    )
+    comment_id = result.scalar_one()
+    await _add_ticket_history(
+        session,
+        ticket_id=ticket_id,
+        event_type="comment_added",
+        field_name="comment",
+        old_value=None,
+        new_value=str(comment_id),
+        actor_id=current_user.id,
+    )
+    await _log_notifications(session, ticket=ticket, event_type="comment_added", actor_id=current_user.id)
+    await session.commit()
+
+    result = await session.execute(
+        text(
+            """
+            SELECT
+                ticket_comments.id,
+                ticket_comments.ticket_id,
+                ticket_comments.author_id,
+                users.full_name AS author_name,
+                ticket_comments.body,
+                ticket_comments.created_at
+            FROM ticket_comments
+            JOIN users ON users.id = ticket_comments.author_id
+            WHERE ticket_comments.id = :comment_id
+            """
+        ),
+        {"comment_id": comment_id},
+    )
+    return TicketCommentRead(**dict(result.mappings().one()))
+
+
+@app.get("/tickets/{ticket_id}/notifications", response_model=list[NotificationLogRead], tags=["tickets"])
+async def read_ticket_notifications(
+    ticket_id: int,
+    current_user: UserRead = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[NotificationLogRead]:
+    ticket = await _load_ticket(session, ticket_id)
+    if not _can_read_ticket(current_user, ticket):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Ticket is not available")
+
+    result = await session.execute(
+        text(
+            """
+            SELECT
+                notification_logs.id,
+                notification_logs.ticket_id,
+                notification_logs.event_type,
+                notification_logs.provider,
+                notification_logs.recipient_user_id,
+                users.full_name AS recipient_name,
+                notification_logs.status,
+                notification_logs.error_message,
+                notification_logs.created_at,
+                notification_logs.sent_at
+            FROM notification_logs
+            LEFT JOIN users ON users.id = notification_logs.recipient_user_id
+            WHERE notification_logs.ticket_id = :ticket_id
+            ORDER BY notification_logs.created_at DESC, notification_logs.id DESC
+            """
+        ),
+        {"ticket_id": ticket_id},
+    )
+    return [NotificationLogRead(**dict(row)) for row in result.mappings().all()]
+
+
 @app.patch("/tickets/{ticket_id}/assign", response_model=TicketRead, tags=["tickets"])
 async def assign_ticket(
     ticket_id: int,
     payload: TicketAssignRequest,
-    _: UserRead = Depends(require_roles("admin")),
+    current_user: UserRead = Depends(require_roles("admin")),
     session: AsyncSession = Depends(get_db_session),
 ) -> TicketRead:
     ticket = await _load_ticket(session, ticket_id)
@@ -348,6 +609,27 @@ async def assign_ticket(
         ),
         {"ticket_id": ticket_id, "assignee_id": payload.assignee_id, "status_id": status_id},
     )
+    await _add_ticket_history(
+        session,
+        ticket_id=ticket_id,
+        event_type="ticket_assigned",
+        field_name="assignee_id",
+        old_value=str(ticket.assignee_id) if ticket.assignee_id is not None else None,
+        new_value=str(payload.assignee_id),
+        actor_id=current_user.id,
+    )
+    if ticket.status_code == "created":
+        await _add_ticket_history(
+            session,
+            ticket_id=ticket_id,
+            event_type="status_changed",
+            field_name="status",
+            old_value=ticket.status_code,
+            new_value="assigned",
+            actor_id=current_user.id,
+        )
+    updated_ticket = await _load_ticket(session, ticket_id)
+    await _log_notifications(session, ticket=updated_ticket, event_type="ticket_assigned", actor_id=current_user.id)
     await session.commit()
     return await _load_ticket(session, ticket_id)
 
@@ -388,5 +670,16 @@ async def update_ticket_status(
         ),
         {"ticket_id": ticket_id, "status_id": status_id},
     )
+    await _add_ticket_history(
+        session,
+        ticket_id=ticket_id,
+        event_type="status_changed",
+        field_name="status",
+        old_value=ticket.status_code,
+        new_value=target_status,
+        actor_id=current_user.id,
+    )
+    updated_ticket = await _load_ticket(session, ticket_id)
+    await _log_notifications(session, ticket=updated_ticket, event_type="status_changed", actor_id=current_user.id)
     await session.commit()
     return await _load_ticket(session, ticket_id)

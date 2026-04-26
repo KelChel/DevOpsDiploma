@@ -213,6 +213,7 @@ p {
 .ticket-form input,
 .ticket-form select,
 .ticket-form textarea,
+.comment-form textarea,
 .filters input,
 .filters select,
 .assign-form select {
@@ -229,10 +230,16 @@ p {
   min-height: 120px;
 }
 
+.comment-form textarea {
+  min-height: 86px;
+  resize: vertical;
+}
+
 .login-form input:focus,
 .ticket-form input:focus,
 .ticket-form select:focus,
 .ticket-form textarea:focus,
+.comment-form textarea:focus,
 .filters input:focus,
 .filters select:focus,
 .assign-form select:focus {
@@ -472,6 +479,12 @@ p {
   background: #fff8df;
 }
 
+.status-pill.failed {
+  border-color: #e7a4a4;
+  color: #a22d2d;
+  background: #fff1f1;
+}
+
 .ticket-card {
   display: grid;
   gap: 16px;
@@ -519,6 +532,69 @@ p {
   max-width: 320px;
 }
 
+.detail-section {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid #d8e2e5;
+  padding-top: 16px;
+}
+
+.comment-form {
+  display: grid;
+  gap: 10px;
+}
+
+.comment-form .button {
+  justify-self: start;
+}
+
+.timeline {
+  display: grid;
+  gap: 10px;
+}
+
+.timeline.compact {
+  gap: 8px;
+}
+
+.timeline-item {
+  border: 1px solid #d8e2e5;
+  border-radius: 6px;
+  padding: 10px;
+  background: #fbfdfd;
+}
+
+.timeline-item strong,
+.timeline-item time {
+  display: block;
+}
+
+.timeline-item time {
+  margin-top: 3px;
+  color: #5d6f78;
+  font-size: 12px;
+}
+
+.timeline-item p {
+  margin: 8px 0 0;
+}
+
+.notification-list {
+  display: grid;
+  gap: 8px;
+}
+
+.notification-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(140px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #d8e2e5;
+  border-radius: 6px;
+  padding: 10px;
+  background: #fbfdfd;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -547,6 +623,10 @@ p {
   .ticket-form,
   .filters,
   .ticket-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .notification-row {
     grid-template-columns: 1fr;
   }
 

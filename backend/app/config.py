@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     jwt_secret_key: str = Field(default="replace_with_local_development_secret", alias="JWT_SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     jwt_access_token_expire_minutes: int = Field(default=60, alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
+    notification_provider: str = Field(default="mock", alias="NOTIFICATION_PROVIDER")
+    max_api_base_url: str = Field(default="", alias="MAX_API_BASE_URL")
+    max_bot_token: str = Field(default="", alias="MAX_BOT_TOKEN")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

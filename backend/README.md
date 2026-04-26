@@ -62,7 +62,7 @@ curl http://localhost:8000/auth/me \
 
 ## Заявки
 
-Итерация 3 добавляет жизненный цикл заявки.
+Итерации 3 и 4 добавляют жизненный цикл заявки, историю, комментарии и журнал уведомлений.
 
 | Endpoint | Назначение | Доступ |
 |---|---|---|
@@ -71,10 +71,16 @@ curl http://localhost:8000/auth/me \
 | `POST /tickets` | Создание заявки. | `employee` |
 | `GET /tickets` | Список заявок с фильтрами по статусу, категории, исполнителю и периоду. | `employee`, `executor`, `admin` |
 | `GET /tickets/{ticket_id}` | Карточка заявки. | Заявитель, назначенный исполнитель, `admin` |
+| `GET /tickets/{ticket_id}/history` | История ключевых событий заявки. | Заявитель, назначенный исполнитель, `admin` |
+| `GET /tickets/{ticket_id}/comments` | Комментарии по заявке. | Заявитель, назначенный исполнитель, `admin` |
+| `POST /tickets/{ticket_id}/comments` | Добавление комментария. | Заявитель, назначенный исполнитель, `admin` |
+| `GET /tickets/{ticket_id}/notifications` | Журнал уведомлений по заявке. | Заявитель, назначенный исполнитель, `admin` |
 | `PATCH /tickets/{ticket_id}/assign` | Назначение исполнителя. | `admin` |
 | `PATCH /tickets/{ticket_id}/status` | Смена статуса по жизненному циклу. | Назначенный `executor`, заявитель при закрытии |
 
 Допустимый путь статусов: `created` -> `assigned` -> `in_progress` -> `completed` -> `closed`.
+
+События `ticket_created`, `ticket_assigned`, `status_changed` и `comment_added` фиксируются в `ticket_history` и создают записи в `notification_logs`.
 
 ## Локальный запуск
 
