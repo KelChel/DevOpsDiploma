@@ -55,6 +55,8 @@ docker compose up --build
 ```bash
 docker compose exec backend pytest
 npm --prefix frontend run build
+docker compose build
+curl -s http://localhost:8000/health
 ```
 
 Для чистой демонстрационной базы:
@@ -63,3 +65,13 @@ npm --prefix frontend run build
 docker compose down --volumes --remove-orphans
 docker compose up --build
 ```
+
+## Финальная приемка
+
+Финальная локальная приемка итерации 9 выполнена 2026-04-26:
+
+- backend-тесты: `22 passed`;
+- frontend-сборка: успешно;
+- Docker build: backend и frontend образы собраны;
+- smoke `/health`: `status=ok`, `database=ok`;
+- критичные замечания: не выявлены.
