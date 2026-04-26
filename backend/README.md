@@ -89,3 +89,14 @@ curl http://localhost:8000/auth/me \
 ```bash
 docker compose up --build
 ```
+
+## Тесты
+
+Тесты backend находятся в `backend/tests` и покрывают unit, API, integration, smoke и security-сценарии MVP.
+
+```bash
+docker compose up -d postgres backend
+docker compose exec backend pytest
+```
+
+Тесты используют текущий `DATABASE_URL`, применяют миграции и очищают таблицы заявок, истории, комментариев и уведомлений.
