@@ -87,6 +87,44 @@ class TicketRead(BaseModel):
     assigned_at: datetime | None = None
     completed_at: datetime | None = None
     closed_at: datetime | None = None
+    sla_due_at: datetime
+    is_overdue: bool
+
+
+class ReportMetricItem(BaseModel):
+    code: str
+    name: str
+    count: int
+
+
+class AssigneeLoadItem(BaseModel):
+    assignee_id: int | None = None
+    assignee_name: str
+    open_count: int
+    overdue_count: int
+
+
+class OverdueTicketRead(BaseModel):
+    id: int
+    title: str
+    priority: TicketPriority
+    status_code: str
+    status_name: str
+    category_name: str
+    assignee_name: str | None = None
+    created_at: datetime
+    sla_due_at: datetime
+
+
+class ReportSummaryRead(BaseModel):
+    total_count: int
+    open_count: int
+    closed_count: int
+    overdue_count: int
+    by_status: list[ReportMetricItem]
+    by_category: list[ReportMetricItem]
+    assignee_load: list[AssigneeLoadItem]
+    overdue_tickets: list[OverdueTicketRead]
 
 
 class TicketHistoryRead(BaseModel):

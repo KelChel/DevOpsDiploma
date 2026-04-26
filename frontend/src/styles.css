@@ -105,6 +105,7 @@ textarea {
 
 h1,
 h2,
+h3,
 p {
   margin-top: 0;
 }
@@ -118,6 +119,11 @@ h1 {
 h2 {
   margin-bottom: 0;
   font-size: 18px;
+}
+
+h3 {
+  margin-bottom: 12px;
+  font-size: 16px;
 }
 
 p {
@@ -485,6 +491,23 @@ p {
   background: #fff1f1;
 }
 
+.status-pill.overdue {
+  border-color: #e7a4a4;
+  color: #a22d2d;
+  background: #fff1f1;
+}
+
+.ticket-row.overdue {
+  border-color: #e7a4a4;
+}
+
+.ticket-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .ticket-card {
   display: grid;
   gap: 16px;
@@ -595,6 +618,89 @@ p {
   background: #fbfdfd;
 }
 
+.reports-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.report-filters {
+  grid-template-columns: repeat(2, minmax(160px, 220px));
+}
+
+.metric-grid,
+.report-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.metric-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.metric-card,
+.report-section,
+.overdue-item {
+  border: 1px solid #d8e2e5;
+  border-radius: 6px;
+  background: #fbfdfd;
+}
+
+.metric-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+}
+
+.metric-card span {
+  color: #5d6f78;
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.metric-card strong {
+  font-size: 28px;
+}
+
+.metric-card.danger strong {
+  color: #a22d2d;
+}
+
+.report-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.report-section {
+  padding: 14px;
+}
+
+.report-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid #d8e2e5;
+  padding: 9px 0;
+}
+
+.report-row:first-of-type {
+  border-top: 0;
+}
+
+.overdue-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+}
+
+.overdue-item + .overdue-item {
+  margin-top: 8px;
+}
+
+.overdue-item span {
+  color: #5d6f78;
+  font-size: 13px;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -622,7 +728,9 @@ p {
   .ticket-workspace,
   .ticket-form,
   .filters,
-  .ticket-meta {
+  .ticket-meta,
+  .metric-grid,
+  .report-grid {
     grid-template-columns: 1fr;
   }
 

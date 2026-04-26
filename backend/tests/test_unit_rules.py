@@ -5,6 +5,7 @@ from app.auth import require_roles
 from app.main import ALLOWED_STATUS_TRANSITIONS, _can_read_ticket, _notification_recipients
 from app.notifications import MockNotificationProvider, build_notification_provider
 from app.schemas import TicketRead, UserRead
+from app.structured_logging import safe_log_fields
 
 
 def user(user_id: int, roles: list[str]) -> UserRead:
@@ -20,6 +21,7 @@ def user(user_id: int, roles: list[str]) -> UserRead:
 def ticket(created_by_id: int = 1, assignee_id: int | None = 2) -> TicketRead:
     from datetime import UTC, datetime
 
+    now = datetime.now(UTC)
     return TicketRead(
         id=10,
         title="Test ticket",
@@ -35,8 +37,10 @@ def ticket(created_by_id: int = 1, assignee_id: int | None = 2) -> TicketRead:
         created_by_name="Requester",
         assignee_id=assignee_id,
         assignee_name="Executor" if assignee_id else None,
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
+        created_at=now,
+        updated_at=now,
+        sla_due_at=now,
+        is_overdue=False,
     )
 
 
@@ -105,3 +109,17 @@ async def test_unconfigured_max_provider_fails_without_secret_leak() -> None:
     assert result.status == "failed"
     assert result.error_message == "MAX provider is not configured"
     assert "secret-token" not in result.error_message
+
+
+def test_structured_log_fields_redact_secrets() -> None:
+    fields = safe_log_fields(
+        ticket_id=1,
+        jwt_token="secret-token",
+        max_bot_token="max-secret",
+        patient_name="forbidden value",
+    )
+
+    assert fields["ticket_id"] == 1
+    assert fields["jwt_token"] == "[redacted]"
+    assert fields["max_bot_token"] == "[redacted]"
+    assert fields["patient_name"] == "[redacted]"

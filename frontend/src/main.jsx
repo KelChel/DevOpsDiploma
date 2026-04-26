@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
+  AlertTriangle,
+  BarChart3,
   Bell,
   ClipboardList,
   Database,
@@ -79,9 +81,13 @@ function App() {
   const [history, setHistory] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [detailsError, setDetailsError] = useState("");
+  const [report, setReport] = useState(null);
+  const [reportError, setReportError] = useState("");
+  const [reportFilters, setReportFilters] = useState({ date_from: "", date_to: "" });
 
   const userRoles = useMemo(() => new Set(user?.roles || []), [user]);
   const canUseTickets = userRoles.has("employee") || userRoles.has("executor") || userRoles.has("admin");
+  const canUseReports = userRoles.has("admin") || userRoles.has("manager");
   const executors = users.filter((item) => item.roles.includes("executor"));
   const selectedTicket = tickets.find((ticket) => ticket.id === selectedTicketId) || tickets[0] || null;
 
@@ -157,6 +163,27 @@ function App() {
       setNotifications(notificationData);
     } catch (error) {
       setDetailsError(error.message);
+    }
+  }
+
+  async function loadReport() {
+    if (!token || !canUseReports) {
+      setReport(null);
+      return;
+    }
+
+    setReportError("");
+    try {
+      const search = new URLSearchParams();
+      Object.entries(reportFilters).forEach(([key, value]) => {
+        if (value) {
+          search.set(key, value);
+        }
+      });
+      const data = await apiFetch(`/reports/summary${search.toString() ? `?${search}` : ""}`);
+      setReport(data);
+    } catch (error) {
+      setReportError(error.message);
     }
   }
 
@@ -261,6 +288,10 @@ function App() {
   useEffect(() => {
     loadTicketDetails(selectedTicketId);
   }, [token, selectedTicketId]);
+
+  useEffect(() => {
+    loadReport();
+  }, [token, user?.id, reportFilters.date_from, reportFilters.date_to]);
 
   const healthText =
     health.status === "ok"
@@ -398,6 +429,10 @@ function App() {
     setFilters((current) => ({ ...current, [key]: value }));
   }
 
+  function updateReportFilter(key, value) {
+    setReportFilters((current) => ({ ...current, [key]: value }));
+  }
+
   function canMoveTo(statusCode) {
     if (!selectedTicket) {
       return false;
@@ -421,6 +456,12 @@ function App() {
     }).format(new Date(value));
   }
 
+  function formatDate(value) {
+    return new Intl.DateTimeFormat("ru-RU", {
+      dateStyle: "short",
+    }).format(new Date(value));
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar" aria-label="Основная навигация">
@@ -432,6 +473,7 @@ function App() {
           <a href="#overview" className="nav-link active">Обзор</a>
           <a href="#auth" className="nav-link">Авторизация</a>
           {canUseTickets && <a href="#tickets" className="nav-link">Заявки</a>}
+          {canUseReports && <a href="#reports" className="nav-link">Отчеты</a>}
           {userRoles.has("admin") && <a href="#admin" className="nav-link">Пользователи</a>}
         </nav>
       </aside>
@@ -439,8 +481,8 @@ function App() {
       <section className="workspace" id="overview">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Итерация 5</p>
-            <h1>История, комментарии и уведомления</h1>
+            <p className="eyebrow">Итерация 7</p>
+            <h1>Отчеты, SLA и демонстрационные данные</h1>
           </div>
           <div className={`health ${health.status}`}>
             <Activity aria-hidden="true" />
@@ -451,18 +493,18 @@ function App() {
         <section className="status-grid" aria-label="Статус реализации">
           <article className="status-card">
             <Server aria-hidden="true" />
-            <h2>История</h2>
-            <p>Создание, назначение, смена статуса и комментарии фиксируются в аудиторской ленте заявки.</p>
+            <h2>SLA</h2>
+            <p>Срок выполнения рассчитывается по приоритету, а просроченные обращения выделяются в списках.</p>
           </article>
           <article className="status-card">
             <Database aria-hidden="true" />
-            <h2>Комментарии</h2>
-            <p>Участники заявки могут обмениваться комментариями без хранения медицинских данных пациентов.</p>
+            <h2>Статистика</h2>
+            <p>Отчеты показывают заявки за период, распределения по статусам и категориям, нагрузку исполнителей.</p>
           </article>
           <article className="status-card">
             <ShieldCheck aria-hidden="true" />
-            <h2>Уведомления</h2>
-            <p>Mock/MAX-провайдер создает журнал событий отправки с получателем, статусом и временем.</p>
+            <h2>Демо-данные</h2>
+            <p>Миграции подготавливают набор заявок для быстрой демонстрации управленческой панели.</p>
           </article>
         </section>
 
@@ -611,16 +653,21 @@ function App() {
                 {!isTicketsLoading && tickets.length === 0 && <p>Заявок по текущим условиям нет.</p>}
                 {tickets.map((ticket) => (
                   <button
-                    className={`ticket-row ${selectedTicket?.id === ticket.id ? "selected" : ""}`}
+                    className={`ticket-row ${selectedTicket?.id === ticket.id ? "selected" : ""} ${ticket.is_overdue ? "overdue" : ""}`}
                     type="button"
                     key={ticket.id}
                     onClick={() => setSelectedTicketId(ticket.id)}
                   >
                     <span>
                       <strong>#{ticket.id} {ticket.title}</strong>
-                      <small>{ticket.category_name} · {priorityLabels[ticket.priority]}</small>
+                      <small>
+                        {ticket.category_name} · {priorityLabels[ticket.priority]} · SLA {formatDateTime(ticket.sla_due_at)}
+                      </small>
                     </span>
-                    <span className={`status-pill ${ticket.status_code}`}>{statusLabels[ticket.status_code] || ticket.status_name}</span>
+                    <span className="ticket-badges">
+                      {ticket.is_overdue && <span className="status-pill overdue">Просрочена</span>}
+                      <span className={`status-pill ${ticket.status_code}`}>{statusLabels[ticket.status_code] || ticket.status_name}</span>
+                    </span>
                   </button>
                 ))}
               </div>
@@ -646,6 +693,8 @@ function App() {
                     <div><dt>Приоритет</dt><dd>{priorityLabels[selectedTicket.priority]}</dd></div>
                     <div><dt>Заявитель</dt><dd>{selectedTicket.created_by_name}</dd></div>
                     <div><dt>Исполнитель</dt><dd>{selectedTicket.assignee_name || "Не назначен"}</dd></div>
+                    <div><dt>SLA до</dt><dd>{formatDateTime(selectedTicket.sla_due_at)}</dd></div>
+                    <div><dt>Просрочка</dt><dd>{selectedTicket.is_overdue ? "Да" : "Нет"}</dd></div>
                   </dl>
 
                   {userRoles.has("admin") && (
@@ -745,6 +794,93 @@ function App() {
                 <p>Выберите заявку из списка.</p>
               )}
             </article>
+          </section>
+        )}
+
+        {canUseReports && (
+          <section className="panel reports-panel" id="reports">
+            <div className="panel-title split-title">
+              <span>
+                <BarChart3 aria-hidden="true" />
+                <h2>Отчеты и SLA</h2>
+              </span>
+              <button className="icon-button" type="button" onClick={loadReport} aria-label="Обновить отчеты">
+                <RefreshCw aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="filters report-filters">
+              <input type="date" value={reportFilters.date_from} onChange={(event) => updateReportFilter("date_from", event.target.value)} aria-label="Отчет с даты" />
+              <input type="date" value={reportFilters.date_to} onChange={(event) => updateReportFilter("date_to", event.target.value)} aria-label="Отчет по дату" />
+            </div>
+
+            {reportError && <p className="form-error">{reportError}</p>}
+            {report && (
+              <>
+                <div className="metric-grid">
+                  <article className="metric-card">
+                    <span>Всего</span>
+                    <strong>{report.total_count}</strong>
+                  </article>
+                  <article className="metric-card">
+                    <span>В работе</span>
+                    <strong>{report.open_count}</strong>
+                  </article>
+                  <article className="metric-card">
+                    <span>Закрыто</span>
+                    <strong>{report.closed_count}</strong>
+                  </article>
+                  <article className="metric-card danger">
+                    <span>Просрочено</span>
+                    <strong>{report.overdue_count}</strong>
+                  </article>
+                </div>
+
+                <div className="report-grid">
+                  <section className="report-section">
+                    <h3>По статусам</h3>
+                    {report.by_status.map((item) => (
+                      <div className="report-row" key={item.code}>
+                        <span>{item.name}</span>
+                        <strong>{item.count}</strong>
+                      </div>
+                    ))}
+                  </section>
+                  <section className="report-section">
+                    <h3>По категориям</h3>
+                    {report.by_category.map((item) => (
+                      <div className="report-row" key={item.code}>
+                        <span>{item.name}</span>
+                        <strong>{item.count}</strong>
+                      </div>
+                    ))}
+                  </section>
+                  <section className="report-section">
+                    <h3>Нагрузка исполнителей</h3>
+                    {report.assignee_load.length === 0 && <p>Нет заявок за выбранный период.</p>}
+                    {report.assignee_load.map((item) => (
+                      <div className="report-row" key={item.assignee_id || "unassigned"}>
+                        <span>{item.assignee_name}</span>
+                        <strong>{item.open_count} / {item.overdue_count}</strong>
+                      </div>
+                    ))}
+                  </section>
+                  <section className="report-section">
+                    <div className="panel-title">
+                      <AlertTriangle aria-hidden="true" />
+                      <h3>Просроченные заявки</h3>
+                    </div>
+                    {report.overdue_tickets.length === 0 && <p>Просроченных заявок нет.</p>}
+                    {report.overdue_tickets.map((ticket) => (
+                      <article className="overdue-item" key={ticket.id}>
+                        <strong>#{ticket.id} {ticket.title}</strong>
+                        <span>{ticket.category_name} · {ticket.status_name} · SLA {formatDate(ticket.sla_due_at)}</span>
+                      </article>
+                    ))}
+                  </section>
+                </div>
+              </>
+            )}
           </section>
         )}
 

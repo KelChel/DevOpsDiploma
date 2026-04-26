@@ -9,9 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db_session
 from app.schemas import UserRead
 from app.security import create_access_token, decode_access_token, verify_password
+from app.structured_logging import get_app_logger, safe_log_fields
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
+logger = get_app_logger("auth")
 
 
 async def _load_user(session: AsyncSession, username: str) -> dict | None:
@@ -64,6 +66,10 @@ async def get_current_user(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> UserRead:
     if credentials is None:
+        logger.warning(
+            "authorization_failed",
+            extra={"event": "authorization_failed", **safe_log_fields(reason="missing_bearer_token")},
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
@@ -73,6 +79,10 @@ async def get_current_user(
     try:
         payload = decode_access_token(credentials.credentials)
     except jwt.PyJWTError as exc:
+        logger.warning(
+            "authorization_failed",
+            extra={"event": "authorization_failed", **safe_log_fields(reason="invalid_or_expired_token")},
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired access token",
@@ -81,10 +91,18 @@ async def get_current_user(
 
     username = payload.get("sub")
     if not isinstance(username, str):
+        logger.warning(
+            "authorization_failed",
+            extra={"event": "authorization_failed", **safe_log_fields(reason="missing_subject")},
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid access token")
 
     user = await _load_user(session, username)
     if not user or not user["is_active"]:
+        logger.warning(
+            "authorization_failed",
+            extra={"event": "authorization_failed", **safe_log_fields(username=username, reason="inactive_or_missing_user")},
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is inactive or missing")
 
     return UserRead(

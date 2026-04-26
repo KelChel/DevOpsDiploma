@@ -2,8 +2,9 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import text
 
-from conftest import create_ticket, executor_id
+from conftest import AsyncSessionLocal, create_ticket, executor_id
 
 
 @pytest.mark.api
@@ -29,6 +30,8 @@ async def test_employee_can_create_ticket(
     assert ticket["status_code"] == "created"
     assert ticket["created_by_name"]
     assert ticket["assignee_id"] is None
+    assert ticket["sla_due_at"]
+    assert ticket["is_overdue"] is False
 
 
 @pytest.mark.api
@@ -143,3 +146,29 @@ async def test_invalid_status_transition_is_rejected(
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Status transition is not allowed"
+
+
+@pytest.mark.api
+@pytest.mark.asyncio
+async def test_manager_report_includes_sla_overdue_ticket(
+    client: AsyncClient,
+    auth_headers: Callable[[str], Awaitable[dict[str, str]]],
+    default_category_id: int,
+) -> None:
+    ticket = await create_ticket(client, auth_headers, default_category_id)
+
+    async with AsyncSessionLocal() as session:
+        await session.execute(
+            text("UPDATE tickets SET sla_due_at = now() - INTERVAL '1 hour' WHERE id = :ticket_id"),
+            {"ticket_id": ticket["id"]},
+        )
+        await session.commit()
+
+    response = await client.get("/reports/summary", headers=await auth_headers("manager"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_count"] == 1
+    assert body["open_count"] == 1
+    assert body["overdue_count"] == 1
+    assert body["overdue_tickets"][0]["id"] == ticket["id"]

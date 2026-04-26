@@ -12,8 +12,12 @@ from app.config import get_settings
 from app.db import engine, get_db_session
 from app.notifications import build_notification_provider
 from app.schemas import (
+    AssigneeLoadItem,
     LoginRequest,
     NotificationLogRead,
+    OverdueTicketRead,
+    ReportMetricItem,
+    ReportSummaryRead,
     RoleRead,
     TicketAssignRequest,
     TicketCategoryRead,
@@ -27,9 +31,12 @@ from app.schemas import (
     TokenResponse,
     UserRead,
 )
+from app.structured_logging import configure_structured_logging, get_app_logger, safe_log_fields
 
 
 settings = get_settings()
+configure_structured_logging(app_name=settings.app_name, app_env=settings.app_env)
+logger = get_app_logger("api")
 notification_provider = build_notification_provider(
     settings.notification_provider,
     max_api_base_url=settings.max_api_base_url,
@@ -42,6 +49,13 @@ ALLOWED_STATUS_TRANSITIONS = {
     "in_progress": {"completed"},
     "completed": {"closed"},
     "closed": set(),
+}
+
+SLA_HOURS_BY_PRIORITY = {
+    "low": 72,
+    "normal": 48,
+    "high": 24,
+    "critical": 4,
 }
 
 TICKET_SELECT = """
@@ -64,7 +78,12 @@ SELECT
     tickets.updated_at,
     tickets.assigned_at,
     tickets.completed_at,
-    tickets.closed_at
+    tickets.closed_at,
+    tickets.sla_due_at,
+    (
+        tickets.sla_due_at < now()
+        AND ticket_statuses.code NOT IN ('completed', 'closed')
+    ) AS is_overdue
 FROM tickets
 JOIN ticket_categories ON ticket_categories.id = tickets.category_id
 JOIN ticket_statuses ON ticket_statuses.id = tickets.status_id
@@ -132,6 +151,10 @@ async def _ensure_executor(session: AsyncSession, assignee_id: int) -> None:
     )
     if result.scalar_one_or_none() is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Assignee must be an active executor")
+
+
+def _sla_hours(priority: str) -> int:
+    return SLA_HOURS_BY_PRIORITY[priority]
 
 
 async def _add_ticket_history(
@@ -218,6 +241,20 @@ async def _log_notifications(
                 "sent_at": result.sent_at,
             },
         )
+        if result.status != "sent":
+            logger.error(
+                "notification_delivery_failed",
+                extra={
+                    "event": "notification_delivery_failed",
+                    **safe_log_fields(
+                        ticket_id=ticket.id,
+                        notification_event_type=event_type,
+                        provider=notification_provider.name,
+                        recipient_user_id=recipient_id,
+                        error_message=result.error_message,
+                    ),
+                },
+            )
 
 
 app = FastAPI(
@@ -253,6 +290,13 @@ async def login(payload: LoginRequest, session: AsyncSession = Depends(get_db_se
     if user is None:
         from fastapi import HTTPException, status
 
+        logger.warning(
+            "authorization_failed",
+            extra={
+                "event": "authorization_failed",
+                **safe_log_fields(username=payload.username, reason="invalid_credentials"),
+            },
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
 
     return TokenResponse(
@@ -331,6 +375,136 @@ async def read_ticket_statuses(_: UserRead = Depends(get_current_user), session:
     return [TicketStatusRead(**dict(row)) for row in result.mappings().all()]
 
 
+@app.get("/reports/summary", response_model=ReportSummaryRead, tags=["reports"])
+async def read_report_summary(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    _: UserRead = Depends(require_roles("admin", "manager")),
+    session: AsyncSession = Depends(get_db_session),
+) -> ReportSummaryRead:
+    clauses = []
+    join_clauses = []
+    params: dict[str, Any] = {}
+    if date_from:
+        clauses.append("tickets.created_at >= :date_from")
+        join_clauses.append("tickets.created_at >= :date_from")
+        params["date_from"] = date_from
+    if date_to:
+        clauses.append("tickets.created_at < (CAST(:date_to AS date) + INTERVAL '1 day')")
+        join_clauses.append("tickets.created_at < (CAST(:date_to AS date) + INTERVAL '1 day')")
+        params["date_to"] = date_to
+    where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    join_sql = f" AND {' AND '.join(join_clauses)}" if join_clauses else ""
+
+    total_result = await session.execute(
+        text(
+            f"""
+            SELECT
+                COUNT(*) AS total_count,
+                COUNT(*) FILTER (WHERE ticket_statuses.code NOT IN ('completed', 'closed')) AS open_count,
+                COUNT(*) FILTER (WHERE ticket_statuses.code IN ('completed', 'closed')) AS closed_count,
+                COUNT(*) FILTER (
+                    WHERE tickets.sla_due_at < now()
+                      AND ticket_statuses.code NOT IN ('completed', 'closed')
+                ) AS overdue_count
+            FROM tickets
+            JOIN ticket_statuses ON ticket_statuses.id = tickets.status_id
+            {where_sql}
+            """
+        ),
+        params,
+    )
+    totals = dict(total_result.mappings().one())
+
+    status_result = await session.execute(
+        text(
+            f"""
+            SELECT ticket_statuses.code, ticket_statuses.name, COUNT(tickets.id) AS count
+            FROM ticket_statuses
+            LEFT JOIN tickets ON tickets.status_id = ticket_statuses.id {join_sql}
+            GROUP BY ticket_statuses.id
+            ORDER BY ticket_statuses.sort_order
+            """
+        ),
+        params,
+    )
+    category_result = await session.execute(
+        text(
+            f"""
+            SELECT ticket_categories.code, ticket_categories.name, COUNT(tickets.id) AS count
+            FROM ticket_categories
+            LEFT JOIN tickets ON tickets.category_id = ticket_categories.id {join_sql}
+            GROUP BY ticket_categories.id
+            ORDER BY ticket_categories.name
+            """
+        ),
+        params,
+    )
+    assignee_result = await session.execute(
+        text(
+            f"""
+            SELECT
+                tickets.assignee_id,
+                COALESCE(users.full_name, 'Не назначен') AS assignee_name,
+                COUNT(*) FILTER (WHERE ticket_statuses.code NOT IN ('completed', 'closed')) AS open_count,
+                COUNT(*) FILTER (
+                    WHERE tickets.sla_due_at < now()
+                      AND ticket_statuses.code NOT IN ('completed', 'closed')
+                ) AS overdue_count
+            FROM tickets
+            JOIN ticket_statuses ON ticket_statuses.id = tickets.status_id
+            LEFT JOIN users ON users.id = tickets.assignee_id
+            {where_sql}
+            GROUP BY tickets.assignee_id, users.full_name
+            ORDER BY overdue_count DESC, open_count DESC, assignee_name
+            """
+        ),
+        params,
+    )
+    overdue_result = await session.execute(
+        text(
+            f"""
+            SELECT
+                tickets.id,
+                tickets.title,
+                tickets.priority,
+                ticket_statuses.code AS status_code,
+                ticket_statuses.name AS status_name,
+                ticket_categories.name AS category_name,
+                assignees.full_name AS assignee_name,
+                tickets.created_at,
+                tickets.sla_due_at
+            FROM tickets
+            JOIN ticket_statuses ON ticket_statuses.id = tickets.status_id
+            JOIN ticket_categories ON ticket_categories.id = tickets.category_id
+            LEFT JOIN users AS assignees ON assignees.id = tickets.assignee_id
+            {where_sql}
+            {"AND" if where_sql else "WHERE"} tickets.sla_due_at < now()
+              AND ticket_statuses.code NOT IN ('completed', 'closed')
+            ORDER BY tickets.sla_due_at ASC
+            LIMIT 20
+            """
+        ),
+        params,
+    )
+
+    category_rows = [
+        ReportMetricItem(**dict(row))
+        for row in category_result.mappings().all()
+    ]
+
+    return ReportSummaryRead(
+        total_count=totals["total_count"],
+        open_count=totals["open_count"],
+        closed_count=totals["closed_count"],
+        overdue_count=totals["overdue_count"],
+        by_status=[ReportMetricItem(**dict(row)) for row in status_result.mappings().all()],
+        by_category=category_rows,
+        assignee_load=[AssigneeLoadItem(**dict(row)) for row in assignee_result.mappings().all()],
+        overdue_tickets=[OverdueTicketRead(**dict(row)) for row in overdue_result.mappings().all()],
+    )
+
+
 @app.get("/tickets", response_model=list[TicketRead], tags=["tickets"])
 async def read_tickets(
     status_code: str | None = Query(default=None, max_length=32),
@@ -387,8 +561,16 @@ async def create_ticket(
     result = await session.execute(
         text(
             """
-            INSERT INTO tickets (title, description, priority, category_id, status_id, created_by_id)
-            VALUES (:title, :description, :priority, :category_id, :status_id, :created_by_id)
+            INSERT INTO tickets (title, description, priority, category_id, status_id, created_by_id, sla_due_at)
+            VALUES (
+                :title,
+                :description,
+                :priority,
+                :category_id,
+                :status_id,
+                :created_by_id,
+                now() + (:sla_hours * INTERVAL '1 hour')
+            )
             RETURNING id
             """
         ),
@@ -399,6 +581,7 @@ async def create_ticket(
             "category_id": payload.category_id,
             "status_id": status_id,
             "created_by_id": current_user.id,
+            "sla_hours": _sla_hours(payload.priority),
         },
     )
     ticket_id = result.scalar_one()
@@ -414,6 +597,13 @@ async def create_ticket(
     ticket = await _load_ticket(session, int(ticket_id))
     await _log_notifications(session, ticket=ticket, event_type="ticket_created", actor_id=current_user.id)
     await session.commit()
+    logger.info(
+        "ticket_created",
+        extra={
+            "event": "ticket_created",
+            **safe_log_fields(ticket_id=int(ticket_id), actor_id=current_user.id, category_id=payload.category_id, priority=payload.priority),
+        },
+    )
     return await _load_ticket(session, int(ticket_id))
 
 
@@ -631,6 +821,13 @@ async def assign_ticket(
     updated_ticket = await _load_ticket(session, ticket_id)
     await _log_notifications(session, ticket=updated_ticket, event_type="ticket_assigned", actor_id=current_user.id)
     await session.commit()
+    logger.info(
+        "ticket_assigned",
+        extra={
+            "event": "ticket_assigned",
+            **safe_log_fields(ticket_id=ticket_id, actor_id=current_user.id, assignee_id=payload.assignee_id),
+        },
+    )
     return await _load_ticket(session, ticket_id)
 
 
@@ -644,6 +841,8 @@ async def update_ticket_status(
     ticket = await _load_ticket(session, ticket_id)
     target_status = payload.status_code
 
+    if target_status == "assigned":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Use ticket assignment endpoint")
     if target_status not in ALLOWED_STATUS_TRANSITIONS.get(ticket.status_code, set()):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Status transition is not allowed")
     if target_status in {"in_progress", "completed"} and (not _has_role(current_user, "executor") or ticket.assignee_id != current_user.id):
@@ -682,4 +881,11 @@ async def update_ticket_status(
     updated_ticket = await _load_ticket(session, ticket_id)
     await _log_notifications(session, ticket=updated_ticket, event_type="status_changed", actor_id=current_user.id)
     await session.commit()
+    logger.info(
+        "ticket_status_changed",
+        extra={
+            "event": "ticket_status_changed",
+            **safe_log_fields(ticket_id=ticket_id, actor_id=current_user.id, old_status=ticket.status_code, new_status=target_status),
+        },
+    )
     return await _load_ticket(session, ticket_id)

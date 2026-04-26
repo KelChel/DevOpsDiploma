@@ -37,6 +37,26 @@ async def test_employee_cannot_assign_ticket(
 @pytest.mark.security
 @pytest.mark.api
 @pytest.mark.asyncio
+async def test_direct_status_assignment_is_rejected(
+    client: AsyncClient,
+    auth_headers: Callable[[str], Awaitable[dict[str, str]]],
+    default_category_id: int,
+) -> None:
+    ticket = await create_ticket(client, auth_headers, default_category_id)
+
+    response = await client.patch(
+        f"/tickets/{ticket['id']}/status",
+        headers=await auth_headers("employee"),
+        json={"status_code": "assigned"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Use ticket assignment endpoint"
+
+
+@pytest.mark.security
+@pytest.mark.api
+@pytest.mark.asyncio
 async def test_unassigned_executor_cannot_read_someone_elses_ticket(
     client: AsyncClient,
     auth_headers: Callable[[str], Awaitable[dict[str, str]]],
