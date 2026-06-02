@@ -481,7 +481,7 @@ function App() {
       <section className="workspace" id="overview">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Итерация 7</p>
+            <p className="eyebrow">Демо-версия</p>
             <h1>Отчеты, SLA и демонстрационные данные</h1>
           </div>
           <div className={`health ${health.status}`}>

@@ -1,0 +1,56 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: devops-ticket-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ticket_system}
+      POSTGRES_USER: ${POSTGRES_USER:-ticket_system}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: devops-ticket-backend
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-demo}
+      APP_DEBUG: ${APP_DEBUG:-false}
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-180}
+      BACKEND_HOST: 0.0.0.0
+      BACKEND_PORT: ${BACKEND_PORT:-18000}
+      BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
+      NOTIFICATION_PROVIDER: ${NOTIFICATION_PROVIDER:-mock}
+      MAX_API_BASE_URL: ${MAX_API_BASE_URL:-}
+      MAX_BOT_TOKEN: ${MAX_BOT_TOKEN:-}
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-18000}:${BACKEND_PORT:-18000}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: devops-ticket-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-15173}:5173"
+    depends_on:
+      - backend
+
+volumes:
+  postgres-data:
