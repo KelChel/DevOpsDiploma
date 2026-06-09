@@ -302,7 +302,8 @@ function App() {
 
   async function handleLogin(event) {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     setIsLoggingIn(true);
     setAuthError("");
 
@@ -323,7 +324,7 @@ function App() {
       const data = await response.json();
       window.localStorage.setItem(tokenStorageKey, data.access_token);
       setToken(data.access_token);
-      event.currentTarget.reset();
+      form.reset();
     } catch (error) {
       setAuthError(error.message);
     } finally {
@@ -341,7 +342,8 @@ function App() {
 
   async function handleCreateTicket(event) {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     setTicketError("");
     setTicketMessage("");
 
@@ -357,7 +359,7 @@ function App() {
       });
       setTicketMessage("Заявка создана");
       setSelectedTicketId(ticket.id);
-      event.currentTarget.reset();
+      form.reset();
       await loadTickets();
     } catch (error) {
       setTicketError(error.message);
@@ -395,7 +397,8 @@ function App() {
     if (!selectedTicket) {
       return;
     }
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     setTicketError("");
     setTicketMessage("");
     try {
@@ -404,7 +407,7 @@ function App() {
         body: JSON.stringify({ body: formData.get("body") }),
       });
       setTicketMessage("Комментарий добавлен");
-      event.currentTarget.reset();
+      form.reset();
       await loadTicketDetails(selectedTicket.id);
     } catch (error) {
       setTicketError(error.message);
